@@ -29,3 +29,5 @@ output/
 *.webm
 *.mp4
 tracklist.yaml
+tests/fixtures/
+
