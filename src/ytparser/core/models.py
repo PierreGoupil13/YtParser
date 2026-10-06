@@ -26,6 +26,15 @@ class Track:
             raise ValueError("Track start must be earlier than its end.")
         if not isinstance(self.title, str) or not isinstance(self.artist, str):
             raise ValueError("Track title and artist must be strings.")
+        
+    def asdict(self) -> dict:
+        return {
+            'number': self.number,
+            'start': self.start, 
+            'end': self.end, 
+            'title': self.title,
+            'artist': self.artist
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,3 +55,8 @@ class Tracklist:
             if expected_number > 1 and tracks[expected_number - 2].end > track.start:
                 raise ValueError("Tracks must not overlap and must be ordered by start time.")
         object.__setattr__(self, "tracks", tracks)
+
+    def asdict(self):
+        return {
+            'tracks' : [track.asdict() for track in self.tracks]
+        }
