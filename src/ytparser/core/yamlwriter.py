@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from ytparser.core.models import Tracklist, Track
 
-def write_yaml(tracks: Tracklist) -> str:
+def to_yaml(tracks: Tracklist) -> str:
     # On va vouloir écrire ligne par ligne ce dict de dict
     data = tracks.asdict()
     for track in data["tracks"] :
@@ -13,7 +13,16 @@ def write_yaml(tracks: Tracklist) -> str:
     # Ecrire le yaml est bon en soit mais il faut gérer la conversion, car on garde tout en secondes
     return(safe_dump(data, allow_unicode=True, sort_keys=False))
 
-# Reste a prendre en compte
+def from_yaml(tracks: str) -> Tracklist:
+    track_data = safe_load(tracks)
+    parsed_tracks = []
+    for track in track_data['tracks']:
+        track['start'] = convertTimeToSec(track['start'])
+        track['end'] = convertTimeToSec(track['end'])
+        parsed_track = Track(track['number'], track['start'], track['end'],track['title'],track['artist'])
+        parsed_tracks.append(parsed_track)
+    return Tracklist(tracks=tuple(parsed_tracks))
+
 def convertSecToTime(time: int) -> str:
     time = Decimal(str(time))
     minutes, secondes = divmod(time, 60);
@@ -31,14 +40,24 @@ def splitFraction(number: int | float) -> str:
     else:
         return(whole.zfill(2) + separator + fraction)
 
+def convertTimeToSec(time: str) -> float:
+    heures, minutes, secondes = time.split(':')
+    total = int(heures) * 3600 + int(minutes)* 60 + Decimal(secondes)
+    return float(total);
+
+
 if __name__ == "__main__":
-    tracklist = Tracklist(
+    original = Tracklist(
         tracks=(
-            Track(number=1, start=0, end=3, title="Intro", artist="Artiste A"),
-            Track(number=2, start=3, end=65, title="Été", artist="Artiste A"),
-            Track(number=3, start=65, end=134, title="Final", artist="Artiste B"),
-            Track(number=4, start=134.5, end=157, title="Final", artist="Artiste B"),
-            Track(number=5, start=157.56, end=3723.486, title="Final", artist="Artiste B"),
+            Track(1, 0, 65.123, "Été", "Artiste A"),
+            Track(2, 65.123, 3723.486, "Final", "Artiste B"),
         )
     )
-    print(write_yaml(tracklist))
+
+    text = to_yaml(original)
+    restored = from_yaml(text)
+
+    print(text)
+    print(restored)
+    assert restored == original
+    print("Aller-retour réussi !")
