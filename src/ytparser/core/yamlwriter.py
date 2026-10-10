@@ -1,7 +1,8 @@
-from yaml import safe_dump, safe_load
 from decimal import Decimal, InvalidOperation
 
-from ytparser.core.models import Tracklist, Track
+from yaml import safe_dump, safe_load
+
+from ytparser.core.models import Track, Tracklist
 
 
 def to_yaml(tracks: Tracklist) -> str:
@@ -14,15 +15,15 @@ def to_yaml(tracks: Tracklist) -> str:
 
 def from_yaml(tracks: str) -> Tracklist:
     track_data = safe_load(tracks)
-    if(not isinstance(track_data, dict) ) :
+    if not isinstance(track_data, dict):
         raise ValueError("Document format is invalid")
-    
+
     if not isinstance(track_data.get("tracks"), list):
         raise ValueError("tracks is required and must be a list.")
-    
+
     parsed_tracks = []
     for track in track_data["tracks"]:
-        if not isinstance(track,dict):
+        if not isinstance(track, dict):
             raise ValueError("Each track must be a mapping.")
 
         try:

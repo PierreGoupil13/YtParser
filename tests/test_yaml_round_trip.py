@@ -1,6 +1,8 @@
-from ytparser.core.yamlwriter import to_yaml, from_yaml, convertTimeToSec, convertSecToTime
-from ytparser.core.models import Track, Tracklist
 import pytest
+
+from ytparser.core.models import Track, Tracklist
+from ytparser.core.yamlwriter import convertSecToTime, convertTimeToSec, from_yaml, to_yaml
+
 
 def test_yaml_round_trip_preserves_tracklist() -> None:
     original = Tracklist(
@@ -13,6 +15,7 @@ def test_yaml_round_trip_preserves_tracklist() -> None:
     text = to_yaml(original)
     restored = from_yaml(text)
     assert restored == original
+
 
 @pytest.mark.parametrize(
     ("secondes", "time"),
@@ -39,4 +42,3 @@ def test_conversion_time_sec(secondes: float, time: str) -> None:
     assert time_converted == time
     secondes_converted = convertTimeToSec(time)
     assert secondes_converted == secondes
-

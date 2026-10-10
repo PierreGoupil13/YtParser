@@ -26,14 +26,14 @@ class Track:
             raise ValueError("Track start must be earlier than its end.")
         if not isinstance(self.title, str) or not isinstance(self.artist, str):
             raise ValueError("Track title and artist must be strings.")
-        
+
     def asdict(self) -> dict:
         return {
-            'number': self.number,
-            'start': self.start, 
-            'end': self.end, 
-            'title': self.title,
-            'artist': self.artist
+            "number": self.number,
+            "start": self.start,
+            "end": self.end,
+            "title": self.title,
+            "artist": self.artist,
         }
 
 
@@ -57,6 +57,4 @@ class Tracklist:
         object.__setattr__(self, "tracks", tracks)
 
     def asdict(self):
-        return {
-            'tracks' : [track.asdict() for track in self.tracks]
-        }
+        return {"tracks": [track.asdict() for track in self.tracks]}
