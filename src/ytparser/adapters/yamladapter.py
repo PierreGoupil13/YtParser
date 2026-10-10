@@ -9,4 +9,4 @@ def load_tracklist(path: Path) -> Tracklist:
 
 
 def save_tracklist(path: Path, tracksYaml: Tracklist) -> None:
-    return path.write_text(to_yaml(tracksYaml), encoding="utf-8")
+    path.write_text(to_yaml(tracksYaml), encoding="utf-8")
