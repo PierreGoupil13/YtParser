@@ -10,7 +10,10 @@ import typer
 from yaml import YAMLError
 
 from ytparser.adapters.ffmpegadapter import cut_tracklist
-from ytparser.adapters.yamladapter import load_tracklist
+from ytparser.adapters.yamladapter import load_tracklist, save_tracklist
+from ytparser.adapters.ytdlpadapter import VideoFetchError, fetch_video_info
+from ytparser.core.plan import build_tracklist
+from ytparser.core.sources import SourceSelection, select_source
 
 app = typer.Typer(no_args_is_help=True, help="YtParser: music compilation tools.")
 
@@ -69,6 +72,63 @@ def cut(
     for path, track in zip(created, tracklist.tracks, strict=True):
         typer.echo(f"{path.name}  {track.artist} - {track.title}")
     typer.echo(f"{len(created)} tracks written to {output}")
+
+
+@app.command()
+def plan(
+    url: Annotated[str, typer.Argument(help="YouTube video URL.")],
+    artist: Annotated[
+        str | None,
+        typer.Option("--artist", "-a", help="Artist used when a label does not name one."),
+    ] = None,
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", dir_okay=False, help="YAML tracklist to write."),
+    ] = Path("tracklist.yaml"),
+    comment: Annotated[
+        int | None,
+        typer.Option(
+            "--comment",
+            "-c",
+            min=1,
+            help="Use this comment of the ranked list instead of chapters or description.",
+        ),
+    ] = None,
+    force: Annotated[bool, typer.Option("--force", help="Overwrite an existing file.")] = False,
+) -> None:
+    """Build an editable YAML tracklist from the timestamps of a YouTube video.
+
+    Sources are tried in order: chapters, description, then the best comment.
+    """
+    if output.exists() and not force:
+        _fail(f"{output} already exists; use --force to overwrite it.")
+
+    try:
+        typer.echo("Fetching video metadata (no download)...")
+        info = fetch_video_info(url)
+        selection = select_source(info, None if comment is None else comment - 1)
+        tracklist = build_tracklist(selection.entries, info.duration, artist)
+        save_tracklist(output, tracklist)
+    except (VideoFetchError, OSError, ValueError) as error:
+        _fail(str(error))
+
+    typer.echo(f"Video: {info.title}")
+    if selection.source == "comment":
+        _echo_comment_candidates(selection)
+    typer.echo(f"{len(tracklist.tracks)} tracks from {selection.source} written to {output}")
+
+
+def _echo_comment_candidates(selection: SourceSelection) -> None:
+    typer.echo("Comment candidates (most timestamps, then most likes):")
+    for index, candidate in enumerate(selection.candidates):
+        marker = "*" if index == selection.chosen else " "
+        first_line = candidate.comment.text.strip().splitlines()[0][:60]
+        typer.echo(
+            f" {marker} {index + 1}. {len(candidate.entries)} timestamps, "
+            f"{candidate.comment.like_count} likes - {first_line}"
+        )
+    if len(selection.candidates) > 1:
+        typer.echo("Use --comment N to pick another one.")
 
 
 def _fail(message: str) -> NoReturn:
