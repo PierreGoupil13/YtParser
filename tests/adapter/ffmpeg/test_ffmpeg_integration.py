@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from ytparser.adapters.ffmpegadapter import cut_track
+from ytparser.adapters.ffmpegadapter import cut_track_without_reencoding
 from ytparser.core.models import Track
 
 
@@ -34,7 +34,7 @@ def test_cut_track_produces_readable_mp3_with_expected_duration(tmp_path: Path) 
         check=True,
     )
 
-    cut_track(source, destination, track)
+    cut_track_without_reencoding(source, destination, track)
 
     assert destination.is_file()
     assert destination.stat().st_size > 0

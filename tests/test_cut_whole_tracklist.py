@@ -1,9 +1,19 @@
-from pathlib import Path
 import json
 import subprocess
-from ytparser.adapters import yamladapter, ffmpegadapter
-from ytparser.core.models import Tracklist 
+from pathlib import Path
+
 import pytest
+
+from ytparser.adapters import ffmpegadapter, yamladapter
+from ytparser.core.models import Tracklist
+
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+
+# Les médias UC1 restent locaux : tests/fixtures/ est exclu de Git
+pytestmark = pytest.mark.skipif(
+    not (FIXTURES_DIR / "UC1.mp3").is_file() or not (FIXTURES_DIR / "UC1.yaml").is_file(),
+    reason="Local UC1 fixtures (tests/fixtures/UC1.mp3 and UC1.yaml) are not versioned.",
+)
 
 
 def test_cut_whole_tracklist_without_reencoding(tmp_path: Path) -> None:
@@ -19,7 +29,6 @@ def test_cut_whole_tracklist_without_reencoding(tmp_path: Path) -> None:
 
     assert len(tracklist.tracks) == 22
 
-
     for track in tracklist.tracks:
         destination = tmp_path / f"{track.title}.mp3"
         ffmpegadapter.cut_track_without_reencoding(source, destination, track)
@@ -28,9 +37,12 @@ def test_cut_whole_tracklist_without_reencoding(tmp_path: Path) -> None:
         probe = subprocess.run(
             [
                 "ffprobe",
-                "-v", "error",
-                "-show_entries", "format=duration:stream=codec_type,sample_rate",
-                "-of", "json",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration:stream=codec_type,sample_rate",
+                "-of",
+                "json",
                 str(destination),
             ],
             check=True,
@@ -42,11 +54,10 @@ def test_cut_whole_tracklist_without_reencoding(tmp_path: Path) -> None:
 
         expected_duration = track.end - track.start
         actual_duration = float(metadata["format"]["duration"])
-        difference = actual_duration - expected_duration    
+        difference = actual_duration - expected_duration
 
         audio_stream = next(
-            stream for stream in metadata["streams"]
-            if stream["codec_type"] == "audio"
+            stream for stream in metadata["streams"] if stream["codec_type"] == "audio"
         )
         sample_rate = int(audio_stream["sample_rate"])
         duration_tolerance = 3 * 1152 / sample_rate
@@ -58,12 +69,13 @@ def test_cut_whole_tracklist_without_reencoding(tmp_path: Path) -> None:
             f"écart={difference:+.3f}s"
         )
 
-        assert actual_duration == pytest.approx(
-            expected_duration, abs=duration_tolerance
-        ), f"Durée incorrecte pour {track.title} : écart de {difference:+.3f}s"
+        assert actual_duration == pytest.approx(expected_duration, abs=duration_tolerance), (
+            f"Durée incorrecte pour {track.title} : écart de {difference:+.3f}s"
+        )
 
     print(f"Sorties audio : {tmp_path}")
     print(tracklist)
+
 
 def test_cut_whole_tracklist_with_reencoding(tmp_path: Path) -> None:
     # Importer le yaml et en faire une tracklist
@@ -78,7 +90,6 @@ def test_cut_whole_tracklist_with_reencoding(tmp_path: Path) -> None:
 
     assert len(tracklist.tracks) == 22
 
-
     for track in tracklist.tracks:
         destination = tmp_path / f"{track.title}.mp3"
         ffmpegadapter.cut_track_with_reencoding(source, destination, track)
@@ -87,9 +98,12 @@ def test_cut_whole_tracklist_with_reencoding(tmp_path: Path) -> None:
         probe = subprocess.run(
             [
                 "ffprobe",
-                "-v", "error",
-                "-show_entries", "format=duration:stream=codec_type,sample_rate",
-                "-of", "json",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration:stream=codec_type,sample_rate",
+                "-of",
+                "json",
                 str(destination),
             ],
             check=True,
@@ -101,11 +115,10 @@ def test_cut_whole_tracklist_with_reencoding(tmp_path: Path) -> None:
 
         expected_duration = track.end - track.start
         actual_duration = float(metadata["format"]["duration"])
-        difference = actual_duration - expected_duration    
+        difference = actual_duration - expected_duration
 
         audio_stream = next(
-            stream for stream in metadata["streams"]
-            if stream["codec_type"] == "audio"
+            stream for stream in metadata["streams"] if stream["codec_type"] == "audio"
         )
         sample_rate = int(audio_stream["sample_rate"])
         duration_tolerance = 3 * 1152 / sample_rate
@@ -117,9 +130,9 @@ def test_cut_whole_tracklist_with_reencoding(tmp_path: Path) -> None:
             f"écart={difference:+.3f}s"
         )
 
-        assert actual_duration == pytest.approx(
-            expected_duration, abs=duration_tolerance
-        ), f"Durée incorrecte pour {track.title} : écart de {difference:+.3f}s"
+        assert actual_duration == pytest.approx(expected_duration, abs=duration_tolerance), (
+            f"Durée incorrecte pour {track.title} : écart de {difference:+.3f}s"
+        )
 
     print(f"Sorties audio : {tmp_path}")
     print(tracklist)
