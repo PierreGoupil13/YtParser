@@ -3,6 +3,7 @@
 import io
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Annotated, NoReturn
 
@@ -10,6 +11,7 @@ import typer
 from yaml import YAMLError
 
 from ytparser.adapters.ffmpegadapter import cut_tracklist, probe_audio_codec
+from ytparser.adapters.libraryadapter import export_library
 from ytparser.adapters.yamladapter import load_tracklist, save_tracklist
 from ytparser.adapters.ytdlpadapter import (
     AudioDownloadError,
@@ -157,6 +159,76 @@ def download(
             err=True,
             fg=typer.colors.YELLOW,
         )
+
+
+@app.command()
+def export(
+    tracklist_file: Annotated[
+        Path,
+        typer.Argument(exists=True, dir_okay=False, readable=True, help="YAML tracklist."),
+    ],
+    audio: Annotated[
+        Path,
+        typer.Option("--audio", "-a", exists=True, dir_okay=False, help="Local .m4a file."),
+    ],
+    album: Annotated[str, typer.Option("--album", help="Album title (the compilation).")],
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", file_okay=False, help="Library root folder."),
+    ] = Path("output"),
+) -> None:
+    """Cut, tag and file tracks as Artist/Album/NN - Title.m4a (Jellyfin layout)."""
+    try:
+        tracklist = load_tracklist(tracklist_file)
+        created = export_library(audio, tracklist, album, output)
+    except subprocess.CalledProcessError as error:
+        details = (error.stderr or "").strip() or "see the messages above."
+        _fail(f"{error.cmd[0]} failed with exit code {error.returncode}: {details}")
+    except (OSError, ValueError, YAMLError) as error:
+        _fail(str(error))
+
+    for path in created:
+        typer.echo(path.relative_to(output))
+    typer.echo(f"{len(created)} tagged tracks written to {output}")
+
+
+@app.command()
+def auto(
+    url: Annotated[str, typer.Argument(help="YouTube video URL.")],
+    artist: Annotated[
+        str | None,
+        typer.Option("--artist", "-a", help="Artist used when a label does not name one."),
+    ] = None,
+    comment: Annotated[
+        int | None,
+        typer.Option("--comment", "-c", min=1, help="Use this comment of the ranked list."),
+    ] = None,
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", file_okay=False, help="Library root folder."),
+    ] = Path("output"),
+) -> None:
+    """URL to tagged tracks: plan, download (m4a), cut, tag and file them in one go."""
+    try:
+        typer.echo("Fetching video metadata (no download)...")
+        info = fetch_video_info(url)
+        selection = select_source(info, None if comment is None else comment - 1)
+        tracklist = build_tracklist(selection.entries, info.duration, artist)
+        typer.echo(f"{len(tracklist.tracks)} tracks from {selection.source}; downloading...")
+        with tempfile.TemporaryDirectory(prefix="ytparser-dl-") as temp:
+            audio = download_audio(url, OutputFormat.M4A, Path(temp))
+            created = export_library(audio, tracklist, info.title, output)
+    except (VideoFetchError, AudioDownloadError) as error:
+        _fail(str(error))
+    except subprocess.CalledProcessError as error:
+        details = (error.stderr or "").strip() or "see the messages above."
+        _fail(f"{error.cmd[0]} failed with exit code {error.returncode}: {details}")
+    except (OSError, ValueError) as error:
+        _fail(str(error))
+
+    for path in created:
+        typer.echo(path.relative_to(output))
+    typer.echo(f"{len(created)} tagged tracks written to {output}")
 
 
 def _echo_comment_candidates(selection: SourceSelection) -> None:
