@@ -5,6 +5,7 @@ from unittest.mock import patch
 import pytest
 
 from ytparser.adapters.ffmpegadapter import (
+    _run_cut,
     cut_track_with_reencoding,
     cut_track_without_reencoding,
 )
@@ -40,6 +41,35 @@ def test_cut_track_with_reencoding_requests_mp3_encoder(tmp_path: Path) -> None:
     assert float(arguments[arguments.index("-ss") + 1]) == pytest.approx(1.234)
     assert float(arguments[arguments.index("-t") + 1]) == pytest.approx(2.5)
     assert run.call_args.kwargs.get("check") is True
+
+
+@pytest.mark.parametrize(
+    ("start", "preroll", "before_input", "after_input"),
+    [
+        (10.0, 1.0, 9.0, 1.0),
+        (0.4, 1.0, 0.0, 0.4),  # the preroll cannot go before the start of the file
+        (0.0, 1.0, 0.0, None),  # nothing to skip: no second -ss
+    ],
+)
+def test_run_cut_with_preroll_decodes_before_the_start(
+    tmp_path: Path, start: float, preroll: float, before_input: float, after_input: float | None
+) -> None:
+    track = Track(1, start, start + 5, "Extrait", "Artiste")
+
+    with patch("subprocess.run") as run:
+        _run_cut(tmp_path / "s.mp3", tmp_path / "d.mp3", track, ["-c:a", "x"], preroll)
+
+    arguments = run.call_args.args[0]
+    input_index = arguments.index("-i")
+    seeks = [float(arguments[i + 1]) for i, value in enumerate(arguments) if value == "-ss"]
+    assert seeks[0] == pytest.approx(before_input)
+    assert arguments.index("-ss") < input_index
+    if after_input is None:
+        assert len(seeks) == 1
+    else:
+        assert seeks[1] == pytest.approx(after_input)
+        assert arguments.index("-ss", input_index) < arguments.index("-t")
+    assert float(arguments[arguments.index("-t") + 1]) == pytest.approx(5)
 
 
 @pytest.mark.parametrize(

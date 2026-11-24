@@ -6,6 +6,7 @@ import pytest
 
 from ytparser.adapters import ffmpegadapter
 from ytparser.core.models import Track, Tracklist
+from ytparser.core.profiles import M4A_PROFILE, mp3_profile
 
 TRACKLIST = Tracklist(
     (
@@ -37,6 +38,51 @@ def test_cut_tracklist_cuts_each_track_in_order(tmp_path: Path) -> None:
         (source, output_dir / "01.mp3", TRACKLIST.tracks[0]),
         (source, output_dir / "02.mp3", TRACKLIST.tracks[1]),
     ]
+
+
+def test_cut_tracklist_with_profile_uses_its_extension_and_codec_args(tmp_path: Path) -> None:
+    source = tmp_path / "compilation.m4a"
+    output_dir = tmp_path / "sortie"
+
+    with (
+        patch.object(ffmpegadapter, "probe_duration", return_value=10.0),
+        patch.object(ffmpegadapter, "probe_audio_codec", return_value="aac"),
+        patch.object(ffmpegadapter, "_run_cut") as run_cut,
+    ):
+        created = ffmpegadapter.cut_tracklist(source, TRACKLIST, output_dir, M4A_PROFILE)
+
+    assert created == [output_dir / "01.m4a", output_dir / "02.m4a"]
+    assert [call.args for call in run_cut.call_args_list] == [
+        (source, output_dir / "01.m4a", TRACKLIST.tracks[0], ["-c:a", "copy"], 0.0),
+        (source, output_dir / "02.m4a", TRACKLIST.tracks[1], ["-c:a", "copy"], 0.0),
+    ]
+
+
+def test_cut_tracklist_refuses_a_stream_copy_with_the_wrong_codec(tmp_path: Path) -> None:
+    output_dir = tmp_path / "sortie"
+
+    with (
+        patch.object(ffmpegadapter, "probe_duration", return_value=10.0),
+        patch.object(ffmpegadapter, "probe_audio_codec", return_value="mp3"),
+        patch.object(ffmpegadapter, "_run_cut") as run_cut,
+    ):
+        with pytest.raises(ValueError, match="mp3 codec.*aac"):
+            ffmpegadapter.cut_tracklist(tmp_path / "c.mp3", TRACKLIST, output_dir, M4A_PROFILE)
+
+    run_cut.assert_not_called()
+    assert not output_dir.exists()
+
+
+def test_cut_tracklist_reencoding_profile_accepts_any_source_codec(tmp_path: Path) -> None:
+    with (
+        patch.object(ffmpegadapter, "probe_duration", return_value=10.0),
+        patch.object(ffmpegadapter, "probe_audio_codec") as probe,
+        patch.object(ffmpegadapter, "_run_cut") as run_cut,
+    ):
+        ffmpegadapter.cut_tracklist(tmp_path / "c.m4a", TRACKLIST, tmp_path / "o", mp3_profile())
+
+    probe.assert_not_called()
+    assert run_cut.call_args_list[0].args[3:] == (["-c:a", "libmp3lame", "-b:a", "192k"], 1.0)
 
 
 def test_cut_tracklist_refuses_existing_files_before_cutting(tmp_path: Path) -> None:

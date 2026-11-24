@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ytparser.core.cutplan import check_tracklist_fits, track_filenames
 from ytparser.core.models import Track, Tracklist
+from ytparser.core.profiles import STREAM_COPY_ARGS, OutputProfile
 
 REQUIRED_TOOLS = ("ffmpeg", "ffprobe")
 
@@ -56,15 +57,27 @@ def probe_audio_codec(source: Path) -> str:
     return str(streams[0]["codec_name"])
 
 
-def cut_tracklist(source: Path, tracklist: Tracklist, output_dir: Path) -> list[Path]:
-    """Cut every track by stream copy into output_dir and return the created files in order."""
+def cut_tracklist(
+    source: Path,
+    tracklist: Tracklist,
+    output_dir: Path,
+    profile: OutputProfile | None = None,
+) -> list[Path]:
+    """Cut every track into output_dir and return the created files in order.
+
+    Without profile, tracks are stream-copied and keep the source extension.
+    With a profile, they get its extension and are cut with its codec arguments.
+    """
     missing = [tool for tool in REQUIRED_TOOLS if shutil.which(tool) is None]
     if missing:
         raise ToolNotFoundError(
             f"{' and '.join(missing)} not found. Install FFmpeg and add it to the PATH."
         )
     check_tracklist_fits(tracklist, probe_duration(source))
-    destinations = [output_dir / name for name in track_filenames(tracklist, source.suffix)]
+    if profile is not None:
+        _check_source_codec(source, profile)
+    suffix = source.suffix if profile is None else profile.extension
+    destinations = [output_dir / name for name in track_filenames(tracklist, suffix)]
     # Tout vérifier avant la première découpe, pour ne pas laisser un dossier à moitié rempli
     existing = [path for path in destinations if path.exists()]
     if existing:
@@ -74,13 +87,29 @@ def cut_tracklist(source: Path, tracklist: Tracklist, output_dir: Path) -> list[
         )
     output_dir.mkdir(parents=True, exist_ok=True)
     for track, destination in zip(tracklist.tracks, destinations, strict=True):
-        cut_track_without_reencoding(source, destination, track)
+        if profile is None:
+            cut_track_without_reencoding(source, destination, track)
+        else:
+            _run_cut(source, destination, track, list(profile.codec_args), profile.preroll)
     return destinations
+
+
+def _check_source_codec(source: Path, profile: OutputProfile) -> None:
+    # Une copie de flux ne convertit rien : le codec de la source doit être celui du format
+    required = profile.source.preferred_codec
+    if profile.codec_args != STREAM_COPY_ARGS or required is None:
+        return
+    codec = probe_audio_codec(source)
+    if codec != required:
+        raise ValueError(
+            f"{source.name} uses the {codec} codec, but the {profile.format.value} format "
+            f"copies a {required} stream. Use a {required} source or another --format."
+        )
 
 
 def cut_track_without_reencoding(source: Path, destination: Path, track: Track) -> None:
     # Copie du flux sans réencodage : rapide, sans nouvelle perte, coupe alignée sur les trames
-    _run_cut(source, destination, track, ["-c:a", "copy"])
+    _run_cut(source, destination, track, list(STREAM_COPY_ARGS))
 
 
 def cut_track_with_reencoding(source: Path, destination: Path, track: Track) -> None:
@@ -88,7 +117,18 @@ def cut_track_with_reencoding(source: Path, destination: Path, track: Track) -> 
     _run_cut(source, destination, track, ["-c:a", "libmp3lame", "-b:a", "192k"])
 
 
-def _run_cut(source: Path, destination: Path, track: Track, codec_args: list[str]) -> None:
+def _run_cut(
+    source: Path,
+    destination: Path,
+    track: Track,
+    codec_args: list[str],
+    preroll: float = 0.0,
+) -> None:
+    # Décoder `preroll` secondes avant le début, puis les jeter (-ss après -i : précis)
+    skipped = min(preroll, track.start)
+    seek = ["-ss", _seconds(track.start - skipped), "-i", _arg(source)]
+    if skipped > 0:
+        seek += ["-ss", _seconds(skipped)]
     subprocess.run(
         [
             # Pas de saisie attendue, pas d'écrasement, seulement les erreurs dans le terminal
@@ -98,10 +138,7 @@ def _run_cut(source: Path, destination: Path, track: Track, codec_args: list[str
             "-v",
             "error",
             # -ss avant -i : recherche dans la source ; -t : durée de la piste, pas l'instant de fin
-            "-ss",
-            _seconds(track.start),
-            "-i",
-            _arg(source),
+            *seek,
             "-t",
             _seconds(track.end - track.start),
             # Premier fichier d'entrée, seulement l'audio, et seulement le premier flux audio

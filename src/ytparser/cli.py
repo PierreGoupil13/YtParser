@@ -10,6 +10,7 @@ from typing import Annotated, NoReturn
 import typer
 from yaml import YAMLError
 
+from ytparser.adapters.configadapter import load_config
 from ytparser.adapters.ffmpegadapter import cut_tracklist, probe_audio_codec
 from ytparser.adapters.libraryadapter import export_library
 from ytparser.adapters.yamladapter import load_tracklist, save_tracklist
@@ -19,9 +20,23 @@ from ytparser.adapters.ytdlpadapter import (
     download_audio,
     fetch_video_info,
 )
-from ytparser.core.download import OutputFormat, source_plan
+from ytparser.core.config import ConfigError, resolve_format
+from ytparser.core.download import OutputFormat
 from ytparser.core.plan import build_tracklist
+from ytparser.core.profiles import OutputProfile, get_profile
 from ytparser.core.sources import SourceSelection, select_source
+
+FORMAT_HELP = "Output format: m4a, mp3 or opus. Default: config file, then m4a."
+ConfigOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--config",
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="YAML settings file to use instead of the user config.yaml.",
+    ),
+]
 
 app = typer.Typer(no_args_is_help=True, help="YtParser: music compilation tools.")
 
@@ -130,19 +145,21 @@ def plan(
 def download(
     url: Annotated[str, typer.Argument(help="YouTube video URL.")],
     audio_format: Annotated[
-        OutputFormat,
-        typer.Option("--format", "-f", help="Target format; selects the source stream."),
-    ] = OutputFormat.M4A,
+        OutputFormat | None,
+        typer.Option("--format", "-f", help=FORMAT_HELP + " Selects the source stream."),
+    ] = None,
     output: Annotated[
         Path,
         typer.Option("--output", "-o", file_okay=False, help="Folder receiving the audio file."),
     ] = Path("output"),
+    config_file: ConfigOption = None,
 ) -> None:
     """Download the audio stream of a video (no video, no re-encoding) and check its codec."""
-    source = source_plan(audio_format)
+    profile = _resolve_profile(audio_format, config_file)
+    source = profile.source
     try:
-        typer.echo(f"Downloading audio for {audio_format.value}...")
-        path = download_audio(url, audio_format, output)
+        typer.echo(f"Downloading audio for {profile.format.value}...")
+        path = download_audio(url, profile.format, output)
         codec = probe_audio_codec(path)
     except AudioDownloadError as error:
         _fail(str(error))
@@ -176,11 +193,16 @@ def export(
         Path,
         typer.Option("--output", "-o", file_okay=False, help="Library root folder."),
     ] = Path("output"),
+    audio_format: Annotated[
+        OutputFormat | None, typer.Option("--format", "-f", help=FORMAT_HELP)
+    ] = None,
+    config_file: ConfigOption = None,
 ) -> None:
-    """Cut, tag and file tracks as Artist/Album/NN - Title.m4a (Jellyfin layout)."""
+    """Cut, tag and file tracks as Artist/Album/NN - Title.ext (Jellyfin layout)."""
+    profile = _resolve_profile(audio_format, config_file)
     try:
         tracklist = load_tracklist(tracklist_file)
-        created = export_library(audio, tracklist, album, output)
+        created = export_library(audio, tracklist, album, output, profile)
     except subprocess.CalledProcessError as error:
         details = (error.stderr or "").strip() or "see the messages above."
         _fail(f"{error.cmd[0]} failed with exit code {error.returncode}: {details}")
@@ -207,8 +229,13 @@ def auto(
         Path,
         typer.Option("--output", "-o", file_okay=False, help="Library root folder."),
     ] = Path("output"),
+    audio_format: Annotated[
+        OutputFormat | None, typer.Option("--format", "-f", help=FORMAT_HELP)
+    ] = None,
+    config_file: ConfigOption = None,
 ) -> None:
-    """URL to tagged tracks: plan, download (m4a), cut, tag and file them in one go."""
+    """URL to tagged tracks: plan, download, cut, tag and file them in one go."""
+    profile = _resolve_profile(audio_format, config_file)
     try:
         typer.echo("Fetching video metadata (no download)...")
         info = fetch_video_info(url)
@@ -216,8 +243,8 @@ def auto(
         tracklist = build_tracklist(selection.entries, info.duration, artist)
         typer.echo(f"{len(tracklist.tracks)} tracks from {selection.source}; downloading...")
         with tempfile.TemporaryDirectory(prefix="ytparser-dl-") as temp:
-            audio = download_audio(url, OutputFormat.M4A, Path(temp))
-            created = export_library(audio, tracklist, info.title, output)
+            audio = download_audio(url, profile.format, Path(temp))
+            created = export_library(audio, tracklist, info.title, output, profile)
     except (VideoFetchError, AudioDownloadError) as error:
         _fail(str(error))
     except subprocess.CalledProcessError as error:
@@ -242,6 +269,15 @@ def _echo_comment_candidates(selection: SourceSelection) -> None:
         )
     if len(selection.candidates) > 1:
         typer.echo("Use --comment N to pick another one.")
+
+
+def _resolve_profile(audio_format: OutputFormat | None, config_file: Path | None) -> OutputProfile:
+    """Apply the priority: --format option, then config file, then the m4a default."""
+    try:
+        config = load_config(config_file)
+    except ConfigError as error:
+        _fail(str(error))
+    return get_profile(resolve_format(audio_format, config), config.mp3_bitrate)
 
 
 def _fail(message: str) -> NoReturn:
