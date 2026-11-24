@@ -30,6 +30,32 @@ def probe_duration(source: Path) -> float:
     return float(duration)
 
 
+def probe_audio_codec(source: Path) -> str:
+    """Return the codec name (aac, opus, mp3...) of the first audio stream, via ffprobe."""
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=codec_name",
+            "-of",
+            "json",
+            _arg(source),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    streams = json.loads(result.stdout).get("streams") or []
+    if not streams or not streams[0].get("codec_name"):
+        raise ValueError(f"ffprobe found no audio stream in {source}.")
+    return str(streams[0]["codec_name"])
+
+
 def cut_tracklist(source: Path, tracklist: Tracklist, output_dir: Path) -> list[Path]:
     """Cut every track by stream copy into output_dir and return the created files in order."""
     missing = [tool for tool in REQUIRED_TOOLS if shutil.which(tool) is None]

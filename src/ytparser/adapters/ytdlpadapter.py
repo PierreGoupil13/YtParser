@@ -1,10 +1,12 @@
 """Fetch video metadata with yt-dlp, without downloading the video."""
 
+from pathlib import Path
 from typing import Any
 
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
+from ytparser.core.download import OutputFormat, explain_download_error, source_plan
 from ytparser.core.video import Chapter, Comment, VideoInfo
 
 MAX_COMMENTS = "200"
@@ -12,6 +14,37 @@ MAX_COMMENTS = "200"
 
 class VideoFetchError(Exception):
     """The video metadata could not be retrieved."""
+
+
+class AudioDownloadError(Exception):
+    """The audio stream could not be downloaded."""
+
+
+def download_audio(url: str, target: OutputFormat, output_dir: Path) -> Path:
+    """Download the audio-only stream best suited to the target format, without re-encoding."""
+    options: dict[str, Any] = {
+        "format": source_plan(target).selector,
+        # Extension réelle du flux choisi (m4a, webm...) ; pas de post-traitement
+        "outtmpl": str(output_dir.absolute() / "%(id)s.%(ext)s"),
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+    }
+    try:
+        with YoutubeDL(options) as ydl:
+            info = ydl.extract_info(url, download=True)
+    except DownloadError as error:
+        raise AudioDownloadError(explain_download_error(str(error))) from error
+    return _downloaded_path(info)
+
+
+def _downloaded_path(info: dict[str, Any] | None) -> Path:
+    downloads = (info or {}).get("requested_downloads") or []
+    filepath = downloads[0].get("filepath") if downloads else None
+    if not filepath or not Path(filepath).is_file():
+        raise AudioDownloadError("yt-dlp reported no downloaded file.")
+    return Path(filepath)
 
 
 def fetch_video_info(url: str) -> VideoInfo:

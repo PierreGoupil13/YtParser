@@ -9,9 +9,15 @@ from typing import Annotated, NoReturn
 import typer
 from yaml import YAMLError
 
-from ytparser.adapters.ffmpegadapter import cut_tracklist
+from ytparser.adapters.ffmpegadapter import cut_tracklist, probe_audio_codec
 from ytparser.adapters.yamladapter import load_tracklist, save_tracklist
-from ytparser.adapters.ytdlpadapter import VideoFetchError, fetch_video_info
+from ytparser.adapters.ytdlpadapter import (
+    AudioDownloadError,
+    VideoFetchError,
+    download_audio,
+    fetch_video_info,
+)
+from ytparser.core.download import OutputFormat, source_plan
 from ytparser.core.plan import build_tracklist
 from ytparser.core.sources import SourceSelection, select_source
 
@@ -116,6 +122,41 @@ def plan(
     if selection.source == "comment":
         _echo_comment_candidates(selection)
     typer.echo(f"{len(tracklist.tracks)} tracks from {selection.source} written to {output}")
+
+
+@app.command()
+def download(
+    url: Annotated[str, typer.Argument(help="YouTube video URL.")],
+    audio_format: Annotated[
+        OutputFormat,
+        typer.Option("--format", "-f", help="Target format; selects the source stream."),
+    ] = OutputFormat.M4A,
+    output: Annotated[
+        Path,
+        typer.Option("--output", "-o", file_okay=False, help="Folder receiving the audio file."),
+    ] = Path("output"),
+) -> None:
+    """Download the audio stream of a video (no video, no re-encoding) and check its codec."""
+    source = source_plan(audio_format)
+    try:
+        typer.echo(f"Downloading audio for {audio_format.value}...")
+        path = download_audio(url, audio_format, output)
+        codec = probe_audio_codec(path)
+    except AudioDownloadError as error:
+        _fail(str(error))
+    except FileNotFoundError:
+        _fail("ffprobe not found. Install FFmpeg and add it to the PATH.")
+    except (subprocess.CalledProcessError, OSError, ValueError) as error:
+        _fail(f"downloaded file is unreadable: {error}")
+
+    typer.echo(f"{path} (codec: {codec})")
+    if not source.is_preferred(codec):
+        typer.secho(
+            f"Warning: preferred {source.preferred_codec} stream unavailable; "
+            f"fell back to {codec}.",
+            err=True,
+            fg=typer.colors.YELLOW,
+        )
 
 
 def _echo_comment_candidates(selection: SourceSelection) -> None:
