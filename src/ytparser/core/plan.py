@@ -42,3 +42,24 @@ def build_tracklist(
             )
         )
     return Tracklist(tuple(tracks))
+
+
+# Une piste plus courte que cela est presque sûrement un creux interne, pas un morceau
+MIN_TRACK_SECONDS = 20.0
+
+
+def build_tracklist_from_cut_points(
+    cut_points: list[float], duration: float, default_artist: str | None = None
+) -> Tracklist:
+    """Build a tracklist from boundaries found in the audio (no titles available).
+
+    The first track starts at 0. A boundary closer than MIN_TRACK_SECONDS to the previous
+    start or to the end is ignored. Tracks are titled "Titre N".
+    """
+    starts = [0.0]
+    for point in sorted(cut_points):
+        if point - starts[-1] >= MIN_TRACK_SECONDS and duration - point >= MIN_TRACK_SECONDS:
+            starts.append(round(point, 3))
+    return build_tracklist(
+        [TimestampEntry(start, "") for start in starts], duration, default_artist
+    )

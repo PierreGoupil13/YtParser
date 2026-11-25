@@ -29,6 +29,10 @@ class SourceSelection:
     chosen: int = 0
 
 
+class NoTimestampsError(ValueError):
+    """Chapters, description and comments hold no usable tracklist."""
+
+
 def rank_comment_candidates(comments: tuple[Comment, ...]) -> tuple[CommentCandidate, ...]:
     """Keep comments holding a tracklist, most timestamps first, then most liked.
 
@@ -60,6 +64,10 @@ def select_source(info: VideoInfo, comment_choice: int | None = None) -> SourceS
     candidates = rank_comment_candidates(info.comments)
     chosen = 0 if comment_choice is None else comment_choice
     if not candidates:
+        if comment_choice is None:
+            raise NoTimestampsError(
+                "No usable timestamps found in chapters, description or comments."
+            )
         raise ValueError("No usable timestamps found in chapters, description or comments.")
     if not 0 <= chosen < len(candidates):
         raise ValueError(f"Comment choice must be between 1 and {len(candidates)}.")

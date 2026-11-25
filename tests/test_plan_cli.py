@@ -1,11 +1,13 @@
 from pathlib import Path
 
+import numpy as np
 import pytest
 from typer.testing import CliRunner
 
 from ytparser import cli
 from ytparser.adapters.yamladapter import load_tracklist
-from ytparser.adapters.ytdlpadapter import VideoFetchError
+from ytparser.adapters.ytdlpadapter import AudioDownloadError, VideoFetchError
+from ytparser.core.signal import AudioSignal
 from ytparser.core.video import Chapter, Comment, VideoInfo
 
 runner = CliRunner()
@@ -72,15 +74,13 @@ def test_plan_refuses_to_overwrite_without_force(
 
 @pytest.mark.parametrize(
     ("error", "message"),
-    [(VideoFetchError("Video unavailable"), "Video unavailable"), (None, "No usable timestamps")],
+    [(VideoFetchError("Video unavailable"), "Video unavailable")],
 )
 def test_plan_reports_errors_without_a_traceback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error, message: str
 ) -> None:
     def fetch(url: str) -> VideoInfo:
-        if error:
-            raise error
-        return VideoInfo("Mix", 300)
+        raise error
 
     monkeypatch.setattr(cli, "fetch_video_info", fetch)
     output = tmp_path / "tracklist.yaml"
@@ -90,3 +90,53 @@ def test_plan_reports_errors_without_a_traceback(
     assert result.exit_code == 1
     assert message in result.output
     assert not output.exists()
+
+
+def test_plan_reports_a_failed_download_of_the_silence_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail(url: str, fmt: object, folder: Path) -> Path:
+        raise AudioDownloadError("Download failed")
+
+    patch_video(monkeypatch, VideoInfo("Mix", 300))
+    monkeypatch.setattr(cli, "download_audio", fail)
+    output = tmp_path / "tracklist.yaml"
+
+    result = runner.invoke(cli.app, ["plan", "URL", "-o", str(output)])
+
+    assert result.exit_code == 1
+    assert "Download failed" in result.output
+    assert not output.exists()
+
+
+def test_plan_falls_back_on_silences_when_no_timestamp_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    rate = 8_000
+    tone = np.sin(2 * np.pi * 440 * np.arange(40 * rate) / rate).astype(np.float32) * 0.5
+    quiet = np.zeros(3 * rate, dtype=np.float32)
+    signal = AudioSignal(np.concatenate([tone, quiet, tone]), rate)
+    patch_video(monkeypatch, VideoInfo("Mix", signal.duration))
+    monkeypatch.setattr(cli, "download_audio", lambda url, fmt, folder: tmp_path / "x.m4a")
+    monkeypatch.setattr(cli, "load_signal", lambda path: signal)
+    output = tmp_path / "tracklist.yaml"
+
+    result = runner.invoke(cli.app, ["plan", "URL", "-o", str(output)])
+
+    assert result.exit_code == 0, result.output
+    assert "2 tracks from silence" in result.output
+    assert "No timestamps found" in result.output
+    tracks = load_tracklist(output).tracks
+    assert tracks[0].end == pytest.approx(41.5, abs=0.1)
+    assert [t.title for t in tracks] == ["Titre 1", "Titre 2"]
+
+
+def test_plan_manual_comment_choice_does_not_fall_back_on_silences(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    patch_video(monkeypatch, VideoInfo("Mix", 300))
+
+    result = runner.invoke(cli.app, ["plan", "URL", "-o", str(tmp_path / "t.yaml"), "-c", "1"])
+
+    assert result.exit_code == 1
+    assert "silence" not in result.output.lower()

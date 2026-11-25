@@ -1,6 +1,6 @@
 import pytest
 
-from ytparser.core.sources import rank_comment_candidates, select_source
+from ytparser.core.sources import NoTimestampsError, rank_comment_candidates, select_source
 from ytparser.core.timestamps import TimestampEntry
 from ytparser.core.video import Chapter, Comment, VideoInfo
 
@@ -53,7 +53,7 @@ def test_single_chapter_or_timestamp_is_not_a_tracklist() -> None:
 def test_nothing_usable_raises() -> None:
     info = make_info(description="Hello", comments=(Comment("nice 1:00"),))
 
-    with pytest.raises(ValueError, match="No usable timestamps"):
+    with pytest.raises(NoTimestampsError, match="No usable timestamps"):
         select_source(info)
 
 

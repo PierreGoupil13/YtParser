@@ -13,6 +13,7 @@ from yaml import YAMLError
 from ytparser.adapters.configadapter import load_config
 from ytparser.adapters.ffmpegadapter import cut_tracklist, probe_audio_codec
 from ytparser.adapters.libraryadapter import export_library
+from ytparser.adapters.signaladapter import load_signal
 from ytparser.adapters.yamladapter import load_tracklist, save_tracklist
 from ytparser.adapters.ytdlpadapter import (
     AudioDownloadError,
@@ -22,9 +23,12 @@ from ytparser.adapters.ytdlpadapter import (
 )
 from ytparser.core.config import ConfigError, resolve_format
 from ytparser.core.download import OutputFormat
-from ytparser.core.plan import build_tracklist
+from ytparser.core.loudness import rms_dbfs
+from ytparser.core.models import Tracklist
+from ytparser.core.plan import build_tracklist, build_tracklist_from_cut_points
 from ytparser.core.profiles import OutputProfile, get_profile
-from ytparser.core.sources import SourceSelection, select_source
+from ytparser.core.silence import cut_points, detect_silences
+from ytparser.core.sources import NoTimestampsError, SourceSelection, select_source
 
 FORMAT_HELP = "Output format: m4a, mp3 or opus. Default: config file, then m4a."
 ConfigOption = Annotated[
@@ -122,6 +126,7 @@ def plan(
     """Build an editable YAML tracklist from the timestamps of a YouTube video.
 
     Sources are tried in order: chapters, description, then the best comment.
+    When none holds a tracklist, the audio is downloaded and split at its silences.
     """
     if output.exists() and not force:
         _fail(f"{output} already exists; use --force to overwrite it.")
@@ -129,16 +134,26 @@ def plan(
     try:
         typer.echo("Fetching video metadata (no download)...")
         info = fetch_video_info(url)
-        selection = select_source(info, None if comment is None else comment - 1)
-        tracklist = build_tracklist(selection.entries, info.duration, artist)
+        try:
+            selection = select_source(info, None if comment is None else comment - 1)
+        except NoTimestampsError:
+            source = "silence"
+            selection = None
+            tracklist = _tracklist_from_silence(url, info.duration, artist)
+        else:
+            source = selection.source
+            tracklist = build_tracklist(selection.entries, info.duration, artist)
         save_tracklist(output, tracklist)
-    except (VideoFetchError, OSError, ValueError) as error:
+    except (VideoFetchError, AudioDownloadError, OSError, ValueError) as error:
         _fail(str(error))
+    except subprocess.CalledProcessError as error:
+        details = (error.stderr or "").strip() or "see the messages above."
+        _fail(f"{error.cmd[0]} failed with exit code {error.returncode}: {details}")
 
     typer.echo(f"Video: {info.title}")
-    if selection.source == "comment":
+    if selection is not None and selection.source == "comment":
         _echo_comment_candidates(selection)
-    typer.echo(f"{len(tracklist.tracks)} tracks from {selection.source} written to {output}")
+    typer.echo(f"{len(tracklist.tracks)} tracks from {source} written to {output}")
 
 
 @app.command()
@@ -256,6 +271,22 @@ def auto(
     for path in created:
         typer.echo(path.relative_to(output))
     typer.echo(f"{len(created)} tagged tracks written to {output}")
+
+
+def _tracklist_from_silence(url: str, duration: float, artist: str | None) -> Tracklist:
+    """Fallback of `plan`: download the audio and cut it where the signal is quiet."""
+    typer.secho(
+        "No timestamps found: downloading the audio to look for silences "
+        "(approximate result, check the YAML).",
+        err=True,
+        fg=typer.colors.YELLOW,
+    )
+    with tempfile.TemporaryDirectory(prefix="ytparser-silence-") as temp:
+        audio = download_audio(url, OutputFormat.M4A, Path(temp))
+        signal = load_signal(audio)
+    silences = detect_silences(rms_dbfs(signal))
+    # La durée mesurée dans le fichier fait foi : celle de YouTube peut différer de quelques ms
+    return build_tracklist_from_cut_points(cut_points(silences), signal.duration, artist)
 
 
 def _echo_comment_candidates(selection: SourceSelection) -> None:

@@ -1,6 +1,10 @@
 import pytest
 
-from ytparser.core.plan import UNKNOWN_ARTIST, build_tracklist
+from ytparser.core.plan import (
+    UNKNOWN_ARTIST,
+    build_tracklist,
+    build_tracklist_from_cut_points,
+)
 from ytparser.core.timestamps import TimestampEntry
 
 
@@ -65,3 +69,28 @@ def test_entries_at_or_after_the_duration_are_dropped() -> None:
 def test_no_entry_inside_the_video_raises() -> None:
     with pytest.raises(ValueError, match="inside the video duration"):
         build_tracklist([TimestampEntry(500, "Late")], duration=100)
+
+
+def test_cut_points_become_generic_tracks() -> None:
+    tracklist = build_tracklist_from_cut_points([100.0, 250.5], duration=400)
+
+    assert [(t.title, t.start, t.end) for t in tracklist.tracks] == [
+        ("Titre 1", 0.0, 100.0),
+        ("Titre 2", 100.0, 250.5),
+        ("Titre 3", 250.5, 400.0),
+    ]
+    assert {t.artist for t in tracklist.tracks} == {UNKNOWN_ARTIST}
+
+
+def test_cut_points_too_close_to_a_neighbour_or_the_edges_are_dropped() -> None:
+    # 5 s après le début, 105 s après le précédent (ok), 8 s avant la fin
+    tracklist = build_tracklist_from_cut_points([5.0, 100.0, 110.0, 392.0], duration=400)
+
+    assert [t.start for t in tracklist.tracks] == [0.0, 100.0]
+
+
+def test_no_cut_point_gives_a_single_track() -> None:
+    tracklist = build_tracklist_from_cut_points([], duration=300, default_artist="Me")
+
+    assert len(tracklist.tracks) == 1
+    assert tracklist.tracks[0].artist == "Me"
