@@ -27,8 +27,11 @@ from ytparser.core.loudness import rms_dbfs
 from ytparser.core.models import Tracklist
 from ytparser.core.plan import build_tracklist, build_tracklist_from_cut_points
 from ytparser.core.profiles import OutputProfile, get_profile
+from ytparser.core.refine import Refinement, refine_tracklist
 from ytparser.core.silence import cut_points, detect_silences
 from ytparser.core.sources import NoTimestampsError, SourceSelection, select_source
+from ytparser.core.spectralchange import find_candidates, spectral_change
+from ytparser.core.spectrum import stft
 
 FORMAT_HELP = "Output format: m4a, mp3 or opus. Default: config file, then m4a."
 ConfigOption = Annotated[
@@ -122,14 +125,42 @@ def plan(
         ),
     ] = None,
     force: Annotated[bool, typer.Option("--force", help="Overwrite an existing file.")] = False,
+    refine: Annotated[
+        bool,
+        typer.Option(
+            "--refine",
+            help="Download the audio and move each timestamp onto the nearest silence.",
+        ),
+    ] = False,
+    refine_position: Annotated[
+        float,
+        typer.Option(
+            "--refine-position",
+            min=0.0,
+            max=1.0,
+            help="Cut inside the silence: 1 = arrival of the next track, 0 = end of the previous.",
+        ),
+    ] = 1.0,
+    refine_spectral: Annotated[
+        bool,
+        typer.Option(
+            "--refine-spectral",
+            help="With --refine, use spectral changes where there is no silence (experimental).",
+        ),
+    ] = False,
 ) -> None:
     """Build an editable YAML tracklist from the timestamps of a YouTube video.
 
     Sources are tried in order: chapters, description, then the best comment.
     When none holds a tracklist, the audio is downloaded and split at its silences.
+    With --refine, the timestamps are then moved onto the nearest silence found in the audio;
+    the unrefined tracklist is kept next to the output (NAME.original.yaml).
     """
-    if output.exists() and not force:
-        _fail(f"{output} already exists; use --force to overwrite it.")
+    original = output.with_name(f"{output.stem}.original{output.suffix}")
+    if not force:
+        for path in (output, original) if refine else (output,):
+            if path.exists():
+                _fail(f"{path} already exists; use --force to overwrite it.")
 
     try:
         typer.echo("Fetching video metadata (no download)...")
@@ -143,6 +174,11 @@ def plan(
         else:
             source = selection.source
             tracklist = build_tracklist(selection.entries, info.duration, artist)
+            if refine:
+                save_tracklist(original, tracklist)
+                tracklist, refinements = _refine_tracklist(
+                    url, tracklist, refine_position, refine_spectral
+                )
         save_tracklist(output, tracklist)
     except (VideoFetchError, AudioDownloadError, OSError, ValueError) as error:
         _fail(str(error))
@@ -154,6 +190,9 @@ def plan(
     if selection is not None and selection.source == "comment":
         _echo_comment_candidates(selection)
     typer.echo(f"{len(tracklist.tracks)} tracks from {source} written to {output}")
+    if refine and selection is not None:
+        _echo_refinements(refinements)
+        typer.echo(f"Original timestamps kept in {original}")
 
 
 @app.command()
@@ -287,6 +326,26 @@ def _tracklist_from_silence(url: str, duration: float, artist: str | None) -> Tr
     silences = detect_silences(rms_dbfs(signal))
     # La durée mesurée dans le fichier fait foi : celle de YouTube peut différer de quelques ms
     return build_tracklist_from_cut_points(cut_points(silences), signal.duration, artist)
+
+
+def _refine_tracklist(
+    url: str, tracklist: Tracklist, position: float, spectral: bool
+) -> tuple[Tracklist, list[Refinement]]:
+    """Download the audio and move each boundary onto the nearest transition."""
+    typer.echo("Downloading the audio to refine the timestamps...")
+    with tempfile.TemporaryDirectory(prefix="ytparser-refine-") as temp:
+        audio = download_audio(url, OutputFormat.M4A, Path(temp))
+        signal = load_signal(audio)
+    candidates = find_candidates(spectral_change(stft(signal, hop=512))) if spectral else []
+    return refine_tracklist(tracklist, rms_dbfs(signal), candidates, position=position)
+
+
+def _echo_refinements(refinements: list[Refinement]) -> None:
+    moved = [r for r in refinements if r.method != "unchanged"]
+    typer.echo(f"Refined {len(moved)} of {len(refinements)} boundaries:")
+    for r in refinements:
+        change = f"{r.original:.1f}s -> {r.refined:.1f}s ({r.shift:+.1f}s, {r.method})"
+        typer.echo(f"  track {r.track}: {change}")
 
 
 def _echo_comment_candidates(selection: SourceSelection) -> None:

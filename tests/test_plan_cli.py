@@ -140,3 +140,43 @@ def test_plan_manual_comment_choice_does_not_fall_back_on_silences(
 
     assert result.exit_code == 1
     assert "silence" not in result.output.lower()
+
+
+def _refine_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    rate = 8_000
+    tone = np.sin(2 * np.pi * 440 * np.arange(60 * rate) / rate).astype(np.float32) * 0.5
+    signal = AudioSignal(np.concatenate([tone, np.zeros(6 * rate, dtype=np.float32), tone]), rate)
+    patch_video(
+        monkeypatch,
+        VideoInfo("Mix", signal.duration, chapters=(Chapter(0, "A - One"), Chapter(56, "B - Two"))),
+    )
+    monkeypatch.setattr(cli, "download_audio", lambda url, fmt, folder: tmp_path / "x.m4a")
+    monkeypatch.setattr(cli, "load_signal", lambda path: signal)
+
+
+def test_plan_refine_moves_timestamps_and_keeps_the_original(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _refine_setup(tmp_path, monkeypatch)
+    output = tmp_path / "tracklist.yaml"
+
+    result = runner.invoke(cli.app, ["plan", "URL", "-o", str(output), "--refine"])
+
+    assert result.exit_code == 0, result.output
+    assert load_tracklist(output).tracks[1].start == pytest.approx(66.0, abs=0.6)
+    assert load_tracklist(tmp_path / "tracklist.original.yaml").tracks[1].start == 56.0
+    assert "track 2: 56.0s ->" in result.output
+
+
+def test_plan_refine_refuses_to_overwrite_the_original_without_force(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _refine_setup(tmp_path, monkeypatch)
+    (tmp_path / "tracklist.original.yaml").write_text("keep me", encoding="utf-8")
+
+    result = runner.invoke(
+        cli.app, ["plan", "URL", "-o", str(tmp_path / "tracklist.yaml"), "--refine"]
+    )
+
+    assert result.exit_code == 1
+    assert "already exists" in result.output
